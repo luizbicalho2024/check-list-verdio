@@ -1,6 +1,5 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, auth, firestore
+from supabase import create_client, Client
 import time
 
 # --- Configuração da Página ---
@@ -11,65 +10,51 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Funções de Autenticação e Firebase ---
+# --- Funções de Autenticação e Supabase ---
 
-# Inicializa o Firebase apenas uma vez
+# Inicializa a conexão com o Supabase
 @st.cache_resource
-def init_firebase():
+def init_supabase_connection():
     try:
-        # Tenta usar as credenciais dos segredos do Streamlit
-        creds_dict = st.secrets["firebase_credentials"]
-        creds = credentials.Certificate(creds_dict)
-        firebase_admin.initialize_app(creds, {
-            'storageBucket': creds_dict['storage_bucket']
-        })
-        print("Firebase App inicializado com sucesso.")
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        return create_client(url, key)
     except Exception as e:
-        # Fallback para caso não encontre as credenciais (ou já inicializado)
-        if not firebase_admin._apps:
-            print(f"Erro ao inicializar Firebase: {e}. Verifique o seu arquivo secrets.toml")
-    return firestore.client()
+        st.error("Erro ao conectar com o Supabase. Verifique suas credenciais em secrets.toml.")
+        st.error(e)
+        st.stop()
 
-db = init_firebase()
+supabase: Client = init_supabase_connection()
 
 def login_user(email, password):
-    """
-    Autentica o usuário com email e senha usando Firebase Auth.
-    Retorna o UID do usuário em caso de sucesso, None caso contrário.
-    """
+    """Autentica o usuário com email e senha usando Supabase Auth."""
     try:
-        # ATENÇÃO: Firebase Admin SDK não tem um método direto de login com senha.
-        # A maneira correta é usar a API REST do Firebase ou o SDK do cliente (JavaScript).
-        # Esta função SIMULA o login buscando o usuário pelo email.
-        # Para um app de produção, a autenticação DEVE ser feita no lado do cliente.
-        user = auth.get_user_by_email(email)
+        # Tenta fazer o login
+        session = supabase.auth.sign_in_with_password({"email": email, "password": password})
         
-        # A verificação de senha não é possível aqui.
-        # Apenas confirmamos que o usuário existe.
-        if user:
-            st.session_state['user_uid'] = user.uid
-            st.session_state['user_email'] = user.email
-            
-            # Busca informações adicionais do usuário no Firestore
-            user_info_ref = db.collection('usuarios').document(user.uid)
-            user_info_doc = user_info_ref.get()
-            if user_info_doc.exists:
-                st.session_state['user_info'] = user_info_doc.to_dict()
+        if session.user:
+            # Busca informações adicionais do usuário na tabela 'usuarios'
+            user_id = session.user.id
+            user_data = supabase.table('usuarios').select("*").eq('id', user_id).single().execute()
+
+            if user_data.data:
+                st.session_state['user_id'] = user_id
+                st.session_state['user_email'] = session.user.email
+                st.session_state['user_info'] = user_data.data
                 st.session_state['logged_in'] = True
                 return True
             else:
                 st.error("Usuário autenticado, mas não encontrado no banco de dados.")
                 return False
         return False
-    except auth.UserNotFoundError:
-        st.error("Usuário não encontrado. Verifique o e-mail.")
-        return False
     except Exception as e:
-        st.error(f"Ocorreu um erro durante o login: {e}")
+        st.error("E-mail ou senha incorretos. Por favor, tente novamente.")
+        # st.error(f"Detalhe do erro: {e}") # Descomente para depuração
         return False
 
 def logout():
     """Limpa o estado da sessão para deslogar o usuário."""
+    # supabase.auth.sign_out() # Opcional, invalida o token no servidor
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
@@ -93,28 +78,22 @@ def show_login_page():
                     if login_user(email, password):
                         st.success("Login realizado com sucesso! Redirecionando...")
                         time.sleep(1)
-                        # Redireciona para a primeira página após o login
                         st.switch_page("pages/2_Dashboard.py")
                     # Mensagens de erro são tratadas dentro da função login_user
 
 # --- Lógica Principal ---
-# Verifica se o usuário já está logado
 if 'logged_in' in st.session_state and st.session_state.logged_in:
     
-    # Se estiver logado, mostra a barra lateral com informações e botão de logout
     with st.sidebar:
         st.subheader(f"Bem-vindo(a), {st.session_state.user_info.get('nome', 'Usuário')}!")
         st.write(f"**Nível:** {st.session_state.user_info.get('nivel_acesso', 'N/A').capitalize()}")
         if st.button("Logout"):
             logout()
     
-    # Se o usuário está logado mas na página de login, redireciona para o dashboard
     st.title("Você já está logado.")
     st.write("Navegue pelas páginas na barra lateral.")
     if st.button("Ir para o Dashboard"):
         st.switch_page("pages/2_Dashboard.py")
 
 else:
-    # Se não estiver logado, mostra a página de login
     show_login_page()
-
