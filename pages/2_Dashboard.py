@@ -73,17 +73,16 @@ if access_level in ['gestor', 'admin']:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="OS Aguardando Finalização", value=stats['aguardando_suporte'])
+        if st.button("Ver Fila de Finalização"):
+            st.switch_page("pages/6_Aguardando_Suporte.py")
     with col2:
         st.metric(label="Relatórios e Análises", value="📊")
+        if st.button("Acessar Relatórios"):
+            st.switch_page("pages/7_Relatorios.py")
     with col3:
         st.metric(label="Criar Nova Ordem de Serviço", value="📝")
-
-    if st.button("Ver Fila de Finalização", key="btn_fila_gestor"):
-        st.switch_page("pages/6_Aguardando_Suporte.py")
-    if st.button("Acessar Relatórios", key="btn_relatorios_gestor"):
-        st.switch_page("pages/7_Relatorios.py")
-    if st.button("Criar Nova OS", key="btn_nova_os_gestor"):
-        st.switch_page("pages/3_Nova_OS.py")
+        if st.button("Criar Nova OS"):
+            st.switch_page("pages/3_Nova_OS.py")
 
 # --- Painel de Admin ---
 if access_level == 'admin':
