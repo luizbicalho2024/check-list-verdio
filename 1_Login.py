@@ -45,16 +45,17 @@ def login_user(email, password):
                 return True
             else:
                 st.error("Usuário autenticado, mas não encontrado no banco de dados.")
+                supabase.auth.sign_out() # Desloga se o perfil não existe
                 return False
         return False
-    except Exception as e:
+    except Exception:
         st.error("E-mail ou senha incorretos. Por favor, tente novamente.")
-        # st.error(f"Detalhe do erro: {e}") # Descomente para depuração
         return False
 
 def logout():
     """Limpa o estado da sessão para deslogar o usuário."""
-    # supabase.auth.sign_out() # Opcional, invalida o token no servidor
+    if 'user_info' in st.session_state:
+      supabase.auth.sign_out()
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
@@ -79,7 +80,6 @@ def show_login_page():
                         st.success("Login realizado com sucesso! Redirecionando...")
                         time.sleep(1)
                         st.switch_page("pages/2_Dashboard.py")
-                    # Mensagens de erro são tratadas dentro da função login_user
 
 # --- Lógica Principal ---
 if 'logged_in' in st.session_state and st.session_state.logged_in:
