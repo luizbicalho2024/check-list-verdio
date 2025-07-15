@@ -102,9 +102,6 @@ with st.form("nova_os_form", clear_on_submit=True):
                 success, result = create_os(os_data)
                 
                 if success:
-                    st.success(f"Ordem de Serviço criada com sucesso! ID: {result}")
+                    st.success(f"Ordem de Serviço criada com sucesso! ID: {result[:8]}...")
                 else:
                     st.error(f"Erro ao criar OS: {result}")
-
-# --- Logout na Barra Lateral ---
-# (código de logout omitido para brevidade)
