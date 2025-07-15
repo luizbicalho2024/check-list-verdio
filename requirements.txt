@@ -2,7 +2,7 @@ streamlit
 supabase
 pandas
 openpyxl
-python-docx-template
 streamlit-drawable-canvas
 requests
 Pillow
+fpdf2
