@@ -4,6 +4,7 @@ from streamlit_drawable_canvas import st_canvas
 from datetime import datetime
 import io
 import json
+from PIL import Image
 
 # --- Verificação de Login e OS Selecionada ---
 if 'logged_in' not in st.session_state or not st.session_state.logged_in:
@@ -41,17 +42,16 @@ def get_checklist_template(vehicle_type):
 def upload_file_to_supabase(bucket_name, file_bytes, destination_path):
     """Faz upload de um arquivo para o Supabase Storage."""
     try:
-        # O método upload espera um objeto de arquivo, então usamos io.BytesIO
-        file_obj = io.BytesIO(file_bytes)
-        supabase.storage.from_(bucket_name).upload(file=file_obj, path=destination_path, file_options={"content-type": "image/png"})
+        # Tenta o upload. O Supabase-py lida com o re-upload se o arquivo já existir (upsert=True)
+        supabase.storage.from_(bucket_name).upload(
+            file=file_bytes, 
+            path=destination_path, 
+            file_options={"content-type": "image/png", "upsert": "true"}
+        )
         # Obtém a URL pública
         res = supabase.storage.from_(bucket_name).get_public_url(destination_path)
         return res
     except Exception as e:
-        # Trata o erro de arquivo já existente
-        if "Duplicate" in str(e):
-            res = supabase.storage.from_(bucket_name).get_public_url(destination_path)
-            return res
         st.error(f"Erro no upload para o bucket '{bucket_name}': {e}")
         return None
 
@@ -117,35 +117,40 @@ if submitted:
         if foto_placa:
             url = upload_file_to_supabase("fotos_os", foto_placa.getvalue(), f"{os_id}/placa.png")
             if url: fotos_urls["placa"] = url
-        # ... (código similar para outras fotos) ...
+        if foto_local_instalacao:
+            url = upload_file_to_supabase("fotos_os", foto_local_instalacao.getvalue(), f"{os_id}/local_instalacao.png")
+            if url: fotos_urls["local"] = url
+        if foto_rastreador:
+            url = upload_file_to_supabase("fotos_os", foto_rastreador.getvalue(), f"{os_id}/rastreador.png")
+            if url: fotos_urls["rastreador"] = url
+        if foto_extra:
+            url = upload_file_to_supabase("fotos_os", foto_extra.getvalue(), f"{os_id}/extra.png")
+            if url: fotos_urls["extra"] = url
 
         # Upload de assinaturas
-        if assinatura_tecnico.image_data is not None:
-            # st_canvas retorna um array RGBA, precisamos converter para PNG
-            from PIL import Image
-            img = Image.fromarray(assinatura_tecnico.image_data.astype('uint8'), 'RGBA')
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
-            url = upload_file_to_supabase("assinaturas", buffer.getvalue(), f"{os_id}/tecnico.png")
-            if url: assinaturas_urls["tecnico"] = url
+        def process_signature(canvas_data, bucket, path):
+            if canvas_data.image_data is not None:
+                img = Image.fromarray(canvas_data.image_data.astype('uint8'), 'RGBA')
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                return upload_file_to_supabase(bucket, buffer.getvalue(), path)
+            return None
+
+        url_sig_tecnico = process_signature(assinatura_tecnico, "assinaturas", f"{os_id}/tecnico.png")
+        if url_sig_tecnico: assinaturas_urls["tecnico"] = url_sig_tecnico
         
-        if assinatura_cliente.image_data is not None:
-            from PIL import Image
-            img = Image.fromarray(assinatura_cliente.image_data.astype('uint8'), 'RGBA')
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
-            url = upload_file_to_supabase("assinaturas", buffer.getvalue(), f"{os_id}/cliente.png")
-            if url: assinaturas_urls["cliente"] = url
+        url_sig_cliente = process_signature(assinatura_cliente, "assinaturas", f"{os_id}/cliente.png")
+        if url_sig_cliente: assinaturas_urls["cliente"] = url_sig_cliente
 
         update_data = {
-            "checklist_respostas": json.dumps(checklist_respostas),
+            "checklist_respostas": checklist_respostas,
             "rastreador_id": rastreador_id,
             "observacoes": observacoes,
             "bloqueio_instalado": bloqueio_instalado,
             "status": "Aguardando Suporte",
             "data_finalizacao": datetime.now().isoformat(),
-            "fotos_urls": json.dumps(fotos_urls),
-            "assinaturas_urls": json.dumps(assinaturas_urls)
+            "fotos_urls": fotos_urls,
+            "assinaturas_urls": assinaturas_urls
         }
         
         try:
@@ -153,6 +158,7 @@ if submitted:
             st.success("Serviço finalizado e dados salvos com sucesso!")
             st.balloons()
             del st.session_state['selected_os_id']
+            st.cache_data.clear()
             import time
             time.sleep(3)
             st.switch_page("pages/2_Dashboard.py")
