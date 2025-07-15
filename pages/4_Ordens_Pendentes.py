@@ -29,6 +29,7 @@ def start_service(os_id):
     try:
         supabase.table('ordens_de_servico').update({"status": "Em Andamento"}).eq('id', os_id).execute()
         st.session_state['selected_os_id'] = os_id
+        st.cache_data.clear() # Limpa o cache para refletir a mudança
         return True
     except Exception as e:
         st.error(f"Erro ao iniciar serviço: {e}")
@@ -68,8 +69,5 @@ else:
             
             if st.button("Iniciar Serviço", key=f"start_{os['id']}"):
                 if start_service(os['id']):
-                    st.success(f"Iniciando serviço para a OS {os['id']}...")
+                    st.success(f"Iniciando serviço para a OS {os['id'][:8]}...")
                     st.switch_page("pages/5_Checklist.py")
-
-# --- Logout na Barra Lateral ---
-# (código de logout omitido para brevidade)
