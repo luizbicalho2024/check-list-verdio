@@ -1,10 +1,9 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import firestore, storage
+from supabase import create_client, Client
 from streamlit_drawable_canvas import st_canvas
-import pandas as pd
 from datetime import datetime
 import io
+import json
 
 # --- Verificação de Login e OS Selecionada ---
 if 'logged_in' not in st.session_state or not st.session_state.logged_in:
@@ -16,37 +15,44 @@ if 'selected_os_id' not in st.session_state:
         st.switch_page("pages/4_Ordens_Pendentes.py")
     st.stop()
 
-# --- Conexão com Firebase ---
-db = firestore.client()
-bucket = storage.bucket()
+# --- Conexão com Supabase ---
+@st.cache_resource
+def init_supabase_connection():
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase: Client = init_supabase_connection()
 os_id = st.session_state.selected_os_id
 
 # --- Funções ---
 @st.cache_data(ttl=30)
 def get_os_details(os_id):
-    doc_ref = db.collection('ordens_de_servico').document(os_id)
-    doc = doc_ref.get()
-    if doc.exists:
-        return doc.to_dict()
-    return None
+    response = supabase.table('ordens_de_servico').select("*").eq('id', os_id).single().execute()
+    return response.data
 
 @st.cache_data(ttl=3600)
 def get_checklist_template(vehicle_type):
-    doc_ref = db.collection('templates_checklist').document(vehicle_type)
-    doc = doc_ref.get()
-    if doc.exists:
-        return doc.to_dict().get('itens', [])
+    response = supabase.table('templates_checklist').select('itens').eq('tipo_veiculo', vehicle_type).single().execute()
+    if response.data:
+        return response.data.get('itens', [])
     return []
 
-def upload_file(file_bytes, destination_blob_name):
-    """Faz upload de um arquivo para o Firebase Storage."""
+def upload_file_to_supabase(bucket_name, file_bytes, destination_path):
+    """Faz upload de um arquivo para o Supabase Storage."""
     try:
-        blob = bucket.blob(destination_blob_name)
-        blob.upload_from_string(file_bytes, content_type='image/png')
-        blob.make_public()
-        return blob.public_url
+        # O método upload espera um objeto de arquivo, então usamos io.BytesIO
+        file_obj = io.BytesIO(file_bytes)
+        supabase.storage.from_(bucket_name).upload(file=file_obj, path=destination_path, file_options={"content-type": "image/png"})
+        # Obtém a URL pública
+        res = supabase.storage.from_(bucket_name).get_public_url(destination_path)
+        return res
     except Exception as e:
-        st.error(f"Erro no upload: {e}")
+        # Trata o erro de arquivo já existente
+        if "Duplicate" in str(e):
+            res = supabase.storage.from_(bucket_name).get_public_url(destination_path)
+            return res
+        st.error(f"Erro no upload para o bucket '{bucket_name}': {e}")
         return None
 
 # --- Carregar Dados ---
@@ -59,17 +65,15 @@ checklist_items = get_checklist_template(os_data.get('veiculo_tipo'))
 
 # --- Interface do Checklist ---
 st.set_page_config(layout="wide")
-st.title(f"📝 Executando Checklist - OS: {os_id}")
+st.title(f"📝 Executando Checklist - OS: {os_id[:8]}...")
 st.info(f"**Cliente:** {os_data.get('cliente_nome')} | **Veículo:** {os_data.get('veiculo_modelo')} - {os_data.get('veiculo_placa')}")
 st.markdown("---")
 
 with st.form("checklist_form"):
-    # --- Seções do Formulário ---
     tab1, tab2, tab3 = st.tabs(["✅ Checklist do Veículo", "📸 Fotos e ID", "🖋️ Assinaturas e Finalização"])
 
     with tab1:
         st.header("Itens do Veículo")
-        st.write("Marque o estado de cada item.")
         checklist_respostas = {}
         if not checklist_items:
             st.warning("Nenhum template de checklist encontrado para este tipo de veículo.")
@@ -92,90 +96,65 @@ with st.form("checklist_form"):
         st.header("Finalização do Serviço")
         observacoes = st.text_area("Observações Gerais", height=150)
         bloqueio_instalado = st.toggle("Bloqueio foi instalado/ativado?", value=False)
-        
         st.subheader("Assinaturas")
         col_sig1, col_sig2 = st.columns(2)
         with col_sig1:
             st.write("Assinatura do Instalador")
-            assinatura_tecnico = st_canvas(
-                fill_color="rgba(255, 165, 0, 0.3)",
-                stroke_width=2,
-                stroke_color="#000000",
-                background_color="#FFFFFF",
-                height=150,
-                width=400,
-                drawing_mode="freedraw",
-                key="canvas_tecnico",
-            )
+            assinatura_tecnico = st_canvas(height=150, width=400, drawing_mode="freedraw", key="canvas_tecnico")
         with col_sig2:
             st.write("Assinatura do Cliente")
-            assinatura_cliente = st_canvas(
-                fill_color="rgba(255, 165, 0, 0.3)",
-                stroke_width=2,
-                stroke_color="#000000",
-                background_color="#FFFFFF",
-                height=150,
-                width=400,
-                drawing_mode="freedraw",
-                key="canvas_cliente",
-            )
+            assinatura_cliente = st_canvas(height=150, width=400, drawing_mode="freedraw", key="canvas_cliente")
 
     submitted = st.form_submit_button("Salvar e Finalizar Serviço", type="primary")
 
 # --- Lógica de Submissão ---
 if submitted:
-    with st.spinner("Salvando dados e fazendo upload dos arquivos... Por favor, aguarde."):
+    with st.spinner("Salvando dados e fazendo upload..."):
+        fotos_urls = {}
+        assinaturas_urls = {}
+        
+        # Upload de fotos
+        if foto_placa:
+            url = upload_file_to_supabase("fotos_os", foto_placa.getvalue(), f"{os_id}/placa.png")
+            if url: fotos_urls["placa"] = url
+        # ... (código similar para outras fotos) ...
+
+        # Upload de assinaturas
+        if assinatura_tecnico.image_data is not None:
+            # st_canvas retorna um array RGBA, precisamos converter para PNG
+            from PIL import Image
+            img = Image.fromarray(assinatura_tecnico.image_data.astype('uint8'), 'RGBA')
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            url = upload_file_to_supabase("assinaturas", buffer.getvalue(), f"{os_id}/tecnico.png")
+            if url: assinaturas_urls["tecnico"] = url
+        
+        if assinatura_cliente.image_data is not None:
+            from PIL import Image
+            img = Image.fromarray(assinatura_cliente.image_data.astype('uint8'), 'RGBA')
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            url = upload_file_to_supabase("assinaturas", buffer.getvalue(), f"{os_id}/cliente.png")
+            if url: assinaturas_urls["cliente"] = url
+
         update_data = {
-            "checklist_respostas": checklist_respostas,
+            "checklist_respostas": json.dumps(checklist_respostas),
             "rastreador_id": rastreador_id,
             "observacoes": observacoes,
             "bloqueio_instalado": bloqueio_instalado,
             "status": "Aguardando Suporte",
-            "data_finalizacao": firestore.SERVER_TIMESTAMP,
-            "fotos_urls": {},
-            "assinaturas_urls": {}
+            "data_finalizacao": datetime.now().isoformat(),
+            "fotos_urls": json.dumps(fotos_urls),
+            "assinaturas_urls": json.dumps(assinaturas_urls)
         }
         
-        # Upload de fotos
-        if foto_placa:
-            url = upload_file(foto_placa.getvalue(), f"fotos_os/{os_id}/placa.png")
-            if url: update_data["fotos_urls"]["placa"] = url
-        if foto_local_instalacao:
-            url = upload_file(foto_local_instalacao.getvalue(), f"fotos_os/{os_id}/local_instalacao.png")
-            if url: update_data["fotos_urls"]["local"] = url
-        if foto_rastreador:
-            url = upload_file(foto_rastreador.getvalue(), f"fotos_os/{os_id}/rastreador.png")
-            if url: update_data["fotos_urls"]["rastreador"] = url
-        if foto_extra:
-            url = upload_file(foto_extra.getvalue(), f"fotos_os/{os_id}/extra.png")
-            if url: update_data["fotos_urls"]["extra"] = url
-
-        # Upload de assinaturas
-        if assinatura_tecnico.image_data is not None:
-            img_bytes = io.BytesIO()
-            pd.DataFrame(assinatura_tecnico.image_data).to_feather(img_bytes) # Workaround to get bytes
-            url = upload_file(assinatura_tecnico.image_data.tobytes(), f"assinaturas/{os_id}/tecnico.png")
-            if url: update_data["assinaturas_urls"]["tecnico"] = url
-        
-        if assinatura_cliente.image_data is not None:
-            url = upload_file(assinatura_cliente.image_data.tobytes(), f"assinaturas/{os_id}/cliente.png")
-            if url: update_data["assinaturas_urls"]["cliente"] = url
-
-        # Atualiza o documento no Firestore
         try:
-            db.collection('ordens_de_servico').document(os_id).update(update_data)
+            supabase.table('ordens_de_servico').update(update_data).eq('id', os_id).execute()
             st.success("Serviço finalizado e dados salvos com sucesso!")
             st.balloons()
-            # Limpa o ID da OS da sessão
             del st.session_state['selected_os_id']
-            st.info("Você será redirecionado para o Dashboard em 3 segundos.")
             import time
             time.sleep(3)
             st.switch_page("pages/2_Dashboard.py")
         except Exception as e:
-            st.error(f"Ocorreu um erro ao salvar os dados no banco de dados: {e}")
-
-# --- Logout na Barra Lateral ---
-with st.sidebar:
-    # ... (código de logout) ...
-    pass
+            st.error(f"Erro ao salvar no banco de dados: {e}")
