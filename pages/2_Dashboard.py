@@ -1,37 +1,39 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import firestore
+from supabase import create_client, Client
 
 # --- Verificação de Login ---
 if 'logged_in' not in st.session_state or not st.session_state.logged_in:
     st.error("Você precisa estar logado para acessar esta página.")
+    st.switch_page("1_Login.py")
     st.stop()
 
-# --- Conexão com Firebase ---
-db = firestore.client()
+# --- Conexão com Supabase ---
+@st.cache_resource
+def init_supabase_connection():
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase: Client = init_supabase_connection()
 user_info = st.session_state.get('user_info', {})
-user_id = st.session_state.get('user_uid')
+user_id = st.session_state.get('user_id')
 
 # --- Funções de Busca ---
-@st.cache_data(ttl=300) # Cache de 5 minutos
+@st.cache_data(ttl=300)
 def get_stats(user_id, access_level):
     stats = {
         "pendentes": 0,
         "aguardando_suporte": 0,
-        "finalizadas_mes": 0
     }
     # Contagem de OS Pendentes para o técnico logado
     if access_level == 'tecnico':
-        pendentes_query = db.collection('ordens_de_servico').where('tecnico_atribuido_id', '==', user_id).where('status', '==', 'Pendente').stream()
-        stats["pendentes"] = len(list(pendentes_query))
+        response = supabase.table('ordens_de_servico').select('id', count='exact').eq('tecnico_atribuido_id', user_id).eq('status', 'Pendente').execute()
+        stats["pendentes"] = response.count
 
     # Contagem de OS Aguardando Suporte (para Suporte, Gestor, Admin)
     if access_level in ['suporte', 'gestor', 'admin']:
-        aguardando_query = db.collection('ordens_de_servico').where('status', '==', 'Aguardando Suporte').stream()
-        stats["aguardando_suporte"] = len(list(aguardando_query))
-
-    # Adicionar contagem de finalizadas no mês se necessário
-    # ... (lógica de data aqui) ...
+        response = supabase.table('ordens_de_servico').select('id', count='exact').eq('status', 'Aguardando Suporte').execute()
+        stats["aguardando_suporte"] = response.count
     
     return stats
 
@@ -51,8 +53,6 @@ if access_level == 'tecnico':
         st.metric(label="Ordens de Serviço Pendentes", value=stats['pendentes'])
         if st.button("Ver Ordens Pendentes"):
             st.switch_page("pages/4_Ordens_Pendentes.py")
-    
-    # Adicionar mais métricas relevantes para o técnico aqui
 
 # --- Visualização para Suporte ---
 if access_level == 'suporte':
@@ -73,16 +73,17 @@ if access_level in ['gestor', 'admin']:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="OS Aguardando Finalização", value=stats['aguardando_suporte'])
-        if st.button("Ver Fila de Finalização"):
-            st.switch_page("pages/6_Aguardando_Suporte.py")
     with col2:
         st.metric(label="Relatórios e Análises", value="📊")
-        if st.button("Acessar Relatórios"):
-            st.switch_page("pages/7_Relatorios.py")
     with col3:
         st.metric(label="Criar Nova Ordem de Serviço", value="📝")
-        if st.button("Criar Nova OS"):
-            st.switch_page("pages/3_Nova_OS.py")
+
+    if st.button("Ver Fila de Finalização", key="btn_fila_gestor"):
+        st.switch_page("pages/6_Aguardando_Suporte.py")
+    if st.button("Acessar Relatórios", key="btn_relatorios_gestor"):
+        st.switch_page("pages/7_Relatorios.py")
+    if st.button("Criar Nova OS", key="btn_nova_os_gestor"):
+        st.switch_page("pages/3_Nova_OS.py")
 
 # --- Painel de Admin ---
 if access_level == 'admin':
