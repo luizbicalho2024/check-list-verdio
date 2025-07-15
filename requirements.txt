@@ -1,0 +1,6 @@
+streamlit
+firebase-admin
+pandas
+openpyxl
+python-docx-template
+streamlit-drawable-canvas
