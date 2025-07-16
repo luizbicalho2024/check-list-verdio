@@ -15,29 +15,45 @@ if access_level != 'admin':
     st.stop()
 
 # --- Conexão com Supabase ---
+
+# Conexão padrão para leitura (usa a chave anônima pública)
 @st.cache_resource
 def init_supabase_connection():
-    """Inicializa a conexão com Supabase, usando a service_key se disponível."""
     url = st.secrets["supabase"]["url"]
-    # Usa a service_key para operações de admin, caso contrário, usa a chave anon.
-    key = st.secrets["supabase"].get("service_key", st.secrets["supabase"]["key"])
+    key = st.secrets["supabase"]["key"]
     return create_client(url, key)
 
-supabase: Client = init_supabase_connection()
+# CONEXÃO DE ADMIN (usa a chave de serviço secreta)
+def get_admin_supabase_client():
+    """Cria um cliente Supabase com permissões de administrador."""
+    try:
+        url = st.secrets["supabase"]["url"]
+        service_key = st.secrets["supabase"]["service_key"]
+        return create_client(url, service_key)
+    except Exception as e:
+        st.error("A chave de serviço (service_key) não foi encontrada nos segredos. Operações de administrador estão desativadas.")
+        st.error(e)
+        return None
+
+# Cliente para operações de leitura geral
+supabase_anon: Client = init_supabase_connection()
+# Cliente para operações de escrita/modificação de administrador
+supabase_admin: Client = get_admin_supabase_client()
 
 # --- Funções de Admin ---
+
 def create_user(email, password, name, level):
+    if not supabase_admin: return False, "Cliente de admin não inicializado."
     try:
-        # Cria o usuário no serviço de Autenticação
-        res = supabase.auth.admin.create_user({
+        # Usa o cliente admin para criar o usuário na autenticação
+        res = supabase_admin.auth.admin.create_user({
             "email": email,
             "password": password,
-            "email_confirm": True # Já cria o usuário como confirmado
+            "email_confirm": True
         })
         
         if res.user:
             user_id = res.user.id
-            # Insere os dados adicionais na tabela 'usuarios'
             user_profile_data = {
                 "id": user_id,
                 "nome": name,
@@ -45,7 +61,8 @@ def create_user(email, password, name, level):
                 "nivel_acesso": level,
                 "is_active": True
             }
-            supabase.table('usuarios').insert(user_profile_data).execute()
+            # Usa o cliente admin para inserir o perfil no banco de dados
+            supabase_admin.table('usuarios').insert(user_profile_data).execute()
             st.cache_data.clear()
             return True, "Usuário criado com sucesso!"
         else:
@@ -55,27 +72,21 @@ def create_user(email, password, name, level):
         return False, str(e)
 
 def update_user(user_id, new_name, new_level, new_email, new_password):
-    """Atualiza os dados do usuário tanto na autenticação quanto no perfil."""
+    if not supabase_admin: return False, "Cliente de admin não inicializado."
     try:
-        # 1. Atualiza os dados de autenticação (email, senha)
         auth_updates = {}
-        if new_email:
-            auth_updates['email'] = new_email
-        if new_password: # Só atualiza a senha se uma nova for fornecida
-            auth_updates['password'] = new_password
+        if new_email: auth_updates['email'] = new_email
+        if new_password: auth_updates['password'] = new_password
         
         if auth_updates:
-            supabase.auth.admin.update_user_by_id(user_id, auth_updates)
+            # Usa o cliente admin para atualizar e-mail/senha
+            supabase_admin.auth.admin.update_user_by_id(user_id, auth_updates)
 
-        # 2. Atualiza os dados do perfil (nome, nível, email)
-        profile_updates = {
-            "nome": new_name,
-            "nivel_acesso": new_level
-        }
-        if new_email:
-            profile_updates['email'] = new_email
+        profile_updates = {"nome": new_name, "nivel_acesso": new_level}
+        if new_email: profile_updates['email'] = new_email
 
-        supabase.table('usuarios').update(profile_updates).eq('id', user_id).execute()
+        # Usa o cliente admin para atualizar o perfil
+        supabase_admin.table('usuarios').update(profile_updates).eq('id', user_id).execute()
         
         st.cache_data.clear()
         return True, "Usuário atualizado com sucesso!"
@@ -83,9 +94,11 @@ def update_user(user_id, new_name, new_level, new_email, new_password):
         return False, str(e)
 
 def toggle_user_status(user_id, current_status):
+    if not supabase_admin: return False, "Cliente de admin não inicializado."
     try:
         new_status = not current_status
-        supabase.table('usuarios').update({"is_active": new_status}).eq('id', user_id).execute()
+        # Usa o cliente admin para ativar/desativar
+        supabase_admin.table('usuarios').update({"is_active": new_status}).eq('id', user_id).execute()
         st.cache_data.clear()
         return True, f"Usuário {'ativado' if new_status else 'desativado'} com sucesso!"
     except Exception as e:
@@ -93,12 +106,17 @@ def toggle_user_status(user_id, current_status):
 
 @st.cache_data(ttl=60)
 def get_all_users():
-    response = supabase.table('usuarios').select("id, nome, email, nivel_acesso, is_active").execute()
+    # Para ler dados, o cliente anônimo é suficiente
+    response = supabase_anon.table('usuarios').select("id, nome, email, nivel_acesso, is_active").execute()
     return response.data
 
 # --- Interface ---
 st.set_page_config(layout="wide")
 st.title("⚙️ Painel Administrativo")
+
+# Verifica se o cliente admin foi inicializado corretamente
+if not supabase_admin:
+    st.stop()
 
 tab1, tab2 = st.tabs(["Gerenciar Usuários", "Gerenciar Templates de Checklist"])
 
@@ -177,6 +195,5 @@ with tab1:
                         st.error(message)
 
 with tab2:
-    # O código de Gerenciar Templates permanece o mesmo
     st.header("Gerenciar Templates de Checklist")
     # ... (código anterior omitido para brevidade) ...
