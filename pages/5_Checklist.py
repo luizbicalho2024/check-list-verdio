@@ -34,21 +34,31 @@ def get_os_details(os_id):
 
 @st.cache_data(ttl=3600)
 def get_checklist_template(vehicle_type):
-    response = supabase.table('templates_checklist').select('itens').eq('tipo_veiculo', vehicle_type).single().execute()
+    """
+    Busca o template de checklist para um tipo de veículo.
+    CORRIGIDO: Agora não causa erro se nenhum template for encontrado.
+    """
+    # Remove .single() para evitar um erro se nenhum template for encontrado.
+    # A query agora retornará uma lista de resultados.
+    response = supabase.table('templates_checklist').select('itens').eq('tipo_veiculo', vehicle_type).execute()
+    
+    # Verifica se a lista de resultados não está vazia.
     if response.data:
-        return response.data.get('itens', [])
+        # Pega o primeiro item da lista
+        template_data = response.data[0]
+        return template_data.get('itens', [])
+    
+    # Se nenhum template foi encontrado, retorna uma lista vazia.
     return []
 
 def upload_file_to_supabase(bucket_name, file_bytes, destination_path):
     """Faz upload de um arquivo para o Supabase Storage."""
     try:
-        # Tenta o upload. O Supabase-py lida com o re-upload se o arquivo já existir (upsert=True)
         supabase.storage.from_(bucket_name).upload(
             file=file_bytes, 
             path=destination_path, 
             file_options={"content-type": "image/png", "upsert": "true"}
         )
-        # Obtém a URL pública
         res = supabase.storage.from_(bucket_name).get_public_url(destination_path)
         return res
     except Exception as e:
@@ -76,8 +86,10 @@ with st.form("checklist_form"):
         st.header("Itens do Veículo")
         checklist_respostas = {}
         if not checklist_items:
-            st.warning("Nenhum template de checklist encontrado para este tipo de veículo.")
+            # Mensagem de aviso se nenhum template for encontrado
+            st.warning(f"Nenhum template de checklist encontrado para o tipo de veículo '{os_data.get('veiculo_tipo')}'. Vá ao Painel de Admin para criar um.")
         else:
+            st.write("Marque o estado de cada item.")
             for item in checklist_items:
                 checklist_respostas[item] = st.radio(item, ["Intacto", "Defeito"], horizontal=True, key=f"check_{item}")
 
@@ -85,7 +97,7 @@ with st.form("checklist_form"):
         st.header("Registros Fotográficos e ID")
         col1, col2 = st.columns(2)
         with col1:
-            rastreador_id = st.text_input("ID do Rastreador Instalado", value=os_data.get('rastreador_id', ''))
+            rastreador_id = st.text_input("ID do Rastreador Principal Instalado", value=os_data.get('rastreador_id', ''))
             foto_placa = st.camera_input("Foto da Placa do Veículo")
             foto_local_instalacao = st.camera_input("Foto do Local de Instalação")
         with col2:
@@ -113,7 +125,6 @@ if submitted:
         fotos_urls = {}
         assinaturas_urls = {}
         
-        # Upload de fotos
         if foto_placa:
             url = upload_file_to_supabase("fotos_os", foto_placa.getvalue(), f"{os_id}/placa.png")
             if url: fotos_urls["placa"] = url
@@ -127,7 +138,6 @@ if submitted:
             url = upload_file_to_supabase("fotos_os", foto_extra.getvalue(), f"{os_id}/extra.png")
             if url: fotos_urls["extra"] = url
 
-        # Upload de assinaturas
         def process_signature(canvas_data, bucket, path):
             if canvas_data.image_data is not None:
                 img = Image.fromarray(canvas_data.image_data.astype('uint8'), 'RGBA')
@@ -143,14 +153,14 @@ if submitted:
         if url_sig_cliente: assinaturas_urls["cliente"] = url_sig_cliente
 
         update_data = {
-            "checklist_respostas": checklist_respostas,
+            "checklist_respostas": json.dumps(checklist_respostas),
             "rastreador_id": rastreador_id,
             "observacoes": observacoes,
             "bloqueio_instalado": bloqueio_instalado,
             "status": "Aguardando Suporte",
             "data_finalizacao": datetime.now().isoformat(),
-            "fotos_urls": fotos_urls,
-            "assinaturas_urls": assinaturas_urls
+            "fotos_urls": json.dumps(fotos_urls),
+            "assinaturas_urls": json.dumps(assinaturas_urls)
         }
         
         try:
