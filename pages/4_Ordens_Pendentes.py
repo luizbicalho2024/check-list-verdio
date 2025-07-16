@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
+import json
 
 # --- Verificação de Login ---
 if 'logged_in' not in st.session_state or not st.session_state.logged_in:
@@ -58,11 +59,30 @@ else:
                 st.subheader("Detalhes do Veículo")
                 st.write(f"**Modelo:** {os['veiculo_modelo']}")
                 st.write(f"**Placa:** {os['veiculo_placa']}")
-                st.write(f"**Tipo:** {os['veiculo_tipo'].capitalize()}")
+                st.write(f"**Tipo:** {os.get('veiculo_tipo', '').capitalize()}")
             with col3:
                 st.subheader("Detalhes do Serviço")
                 st.write(f"**Tipo:** {os['servico_tipo']}")
-                st.write(f"**Rastreador:** {os['rastreador_tipo']}")
+                
+                # --- CORREÇÃO APLICADA AQUI ---
+                # Lê os detalhes do rastreador da nova coluna JSON
+                rastreador_info_str = "N/A"
+                if os.get('rastreador_detalhes'):
+                    try:
+                        # Carrega o JSON
+                        details = json.loads(os['rastreador_detalhes'])
+                        # Pega a lista de tipos
+                        tipos = details.get('tipos', [])
+                        # Formata para exibição
+                        rastreador_info_str = ", ".join(tipos)
+                        # Adiciona a quantidade de câmeras, se houver
+                        if 'Câmera' in tipos and details.get('camera_qtd', 0) > 0:
+                            rastreador_info_str += f" ({details['camera_qtd']}x)"
+                    except (json.JSONDecodeError, TypeError):
+                        # Fallback para o caso de dados mal formatados
+                        rastreador_info_str = str(os['rastreador_detalhes'])
+
+                st.write(f"**Rastreador(es):** {rastreador_info_str}")
             
             st.markdown("**Problema Reclamado / Detalhes:**")
             st.warning(os.get('problema_reclamado', 'Nenhum detalhe fornecido.'))
