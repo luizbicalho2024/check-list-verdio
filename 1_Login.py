@@ -10,9 +10,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Funções de Autenticação e Supabase ---
-
-# Inicializa a conexão com o Supabase
+# --- Conexão com Supabase ---
 @st.cache_resource
 def init_supabase_connection():
     try:
@@ -27,17 +25,21 @@ def init_supabase_connection():
 supabase: Client = init_supabase_connection()
 
 def login_user(email, password):
-    """Autentica o usuário com email e senha usando Supabase Auth."""
+    """Autentica o usuário e verifica se a conta está ativa."""
     try:
-        # Tenta fazer o login
         session = supabase.auth.sign_in_with_password({"email": email, "password": password})
         
         if session.user:
-            # Busca informações adicionais do usuário na tabela 'usuarios'
             user_id = session.user.id
             user_data = supabase.table('usuarios').select("*").eq('id', user_id).single().execute()
 
             if user_data.data:
+                # VERIFICAÇÃO DE USUÁRIO ATIVO
+                if user_data.data.get('is_active') is False:
+                    st.error("Sua conta está desativada. Entre em contato com o administrador.")
+                    supabase.auth.sign_out()
+                    return False
+
                 st.session_state['user_id'] = user_id
                 st.session_state['user_email'] = session.user.email
                 st.session_state['user_info'] = user_data.data
@@ -45,7 +47,7 @@ def login_user(email, password):
                 return True
             else:
                 st.error("Usuário autenticado, mas não encontrado no banco de dados.")
-                supabase.auth.sign_out() # Desloga se o perfil não existe
+                supabase.auth.sign_out()
                 return False
         return False
     except Exception:
