@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 import uuid
+import json
 
 # --- Verificação de Login e Permissão ---
 if 'logged_in' not in st.session_state or not st.session_state.logged_in:
@@ -41,6 +42,7 @@ def create_os(data):
 
 # --- Listas de Opções ---
 TIPOS_VEICULO = ["Carro", "Moto", "Caminhão", "Máquina"]
+# Opções de rastreadores, incluindo "Câmera"
 TIPOS_RASTREADOR = ["GPRS", "Satélite", "RFID", "Teclado", "DMS", "ADAS", "TDI", "Câmera"]
 TIPOS_SERVICO = ["Instalação", "Manutenção", "Desinstalação"]
 
@@ -69,20 +71,34 @@ with st.form("nova_os_form", clear_on_submit=True):
     col3, col4 = st.columns(2)
     with col3:
         servico_tipo = st.selectbox("Tipo de Serviço", options=TIPOS_SERVICO)
-        rastreador_tipo = st.selectbox("Tipo de Rastreador", options=TIPOS_RASTREADOR)
-    with col4:
         tecnico_nome_selecionado = st.selectbox("Atribuir ao Técnico", options=list(technicians.keys()))
     
+    with col4:
+        # Múltipla escolha para rastreadores
+        rastreadores_selecionados = st.multiselect("Tipos de Rastreador (múltipla escolha)", options=TIPOS_RASTREADOR)
+        
+        # Campo condicional para quantidade de câmeras
+        camera_qtd = 0
+        if "Câmera" in rastreadores_selecionados:
+            camera_qtd = st.number_input("Quantidade de Câmeras", min_value=1, max_value=4, value=1, step=1)
+
     problema_reclamado = st.text_area("Problema Reclamado / Detalhes Adicionais")
 
     submitted = st.form_submit_button("Criar Ordem de Serviço")
 
     if submitted:
-        if not all([cliente_nome, cliente_endereco, veiculo_modelo, veiculo_placa, tecnico_nome_selecionado]):
-            st.error("Por favor, preencha todos os campos obrigatórios.")
+        if not all([cliente_nome, cliente_endereco, veiculo_modelo, veiculo_placa, tecnico_nome_selecionado, rastreadores_selecionados]):
+            st.error("Por favor, preencha todos os campos obrigatórios, incluindo ao menos um tipo de rastreador.")
         else:
             with st.spinner("Criando OS..."):
                 tecnico_id = technicians[tecnico_nome_selecionado]
+                
+                # Prepara o JSON com os detalhes dos rastreadores
+                rastreador_detalhes = {
+                    "tipos": rastreadores_selecionados,
+                    "camera_qtd": camera_qtd if "Câmera" in rastreadores_selecionados else 0
+                }
+
                 os_data = {
                     "id": str(uuid.uuid4()),
                     "cliente_nome": cliente_nome,
@@ -91,7 +107,7 @@ with st.form("nova_os_form", clear_on_submit=True):
                     "veiculo_placa": veiculo_placa.upper(),
                     "veiculo_tipo": veiculo_tipo.lower(),
                     "servico_tipo": servico_tipo,
-                    "rastreador_tipo": rastreador_tipo,
+                    "rastreador_detalhes": json.dumps(rastreador_detalhes), # Salva como JSON
                     "problema_reclamado": problema_reclamado,
                     "tecnico_atribuido_id": tecnico_id,
                     "tecnico_nome": tecnico_nome_selecionado,
