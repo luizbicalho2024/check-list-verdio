@@ -17,8 +17,10 @@ if access_level != 'admin':
 # --- Conexão com Supabase ---
 @st.cache_resource
 def init_supabase_connection():
+    """Inicializa a conexão com Supabase, usando a service_key se disponível."""
     url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
+    # Usa a service_key para operações de admin, caso contrário, usa a chave anon.
+    key = st.secrets["supabase"].get("service_key", st.secrets["supabase"]["key"])
     return create_client(url, key)
 
 supabase: Client = init_supabase_connection()
@@ -26,9 +28,16 @@ supabase: Client = init_supabase_connection()
 # --- Funções de Admin ---
 def create_user(email, password, name, level):
     try:
-        res = supabase.auth.sign_up({"email": email, "password": password})
+        # Cria o usuário no serviço de Autenticação
+        res = supabase.auth.admin.create_user({
+            "email": email,
+            "password": password,
+            "email_confirm": True # Já cria o usuário como confirmado
+        })
+        
         if res.user:
             user_id = res.user.id
+            # Insere os dados adicionais na tabela 'usuarios'
             user_profile_data = {
                 "id": user_id,
                 "nome": name,
@@ -41,15 +50,33 @@ def create_user(email, password, name, level):
             return True, "Usuário criado com sucesso!"
         else:
             return False, "Não foi possível criar o usuário na autenticação."
+            
     except Exception as e:
         return False, str(e)
 
-def update_user(user_id, new_name, new_level):
+def update_user(user_id, new_name, new_level, new_email, new_password):
+    """Atualiza os dados do usuário tanto na autenticação quanto no perfil."""
     try:
-        supabase.table('usuarios').update({
+        # 1. Atualiza os dados de autenticação (email, senha)
+        auth_updates = {}
+        if new_email:
+            auth_updates['email'] = new_email
+        if new_password: # Só atualiza a senha se uma nova for fornecida
+            auth_updates['password'] = new_password
+        
+        if auth_updates:
+            supabase.auth.admin.update_user_by_id(user_id, auth_updates)
+
+        # 2. Atualiza os dados do perfil (nome, nível, email)
+        profile_updates = {
             "nome": new_name,
             "nivel_acesso": new_level
-        }).eq('id', user_id).execute()
+        }
+        if new_email:
+            profile_updates['email'] = new_email
+
+        supabase.table('usuarios').update(profile_updates).eq('id', user_id).execute()
+        
         st.cache_data.clear()
         return True, "Usuário atualizado com sucesso!"
     except Exception as e:
@@ -94,6 +121,7 @@ with tab1:
                     success, message = create_user(new_email, new_password, new_name, new_level)
                     if success:
                         st.success(message)
+                        st.rerun()
                     else:
                         st.error(f"Erro: {message}")
 
@@ -103,21 +131,8 @@ with tab1:
     if not users:
         st.info("Nenhum usuário cadastrado.")
     else:
-        # Cria um DataFrame para melhor visualização
-        df_users = pd.DataFrame(users)
-        df_users['Status'] = df_users['is_active'].apply(lambda x: 'Ativo' if x else 'Desativado')
-        
-        st.dataframe(
-            df_users[['nome', 'email', 'nivel_acesso', 'Status']],
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.subheader("Editar ou Desativar Usuário")
-        
-        # Seleciona o usuário para editar
         user_emails = [user['email'] for user in users]
-        selected_email = st.selectbox("Selecione um usuário para gerenciar", options=user_emails)
+        selected_email = st.selectbox("Selecione um usuário para gerenciar", options=user_emails, index=None, placeholder="Escolha um usuário...")
         
         if selected_email:
             selected_user = next((user for user in users if user['email'] == selected_email), None)
@@ -125,25 +140,31 @@ with tab1:
             if selected_user:
                 st.markdown(f"### Gerenciando: {selected_user['nome']}")
                 
-                # Formulário de Edição
                 with st.form(f"edit_form_{selected_user['id']}", border=True):
                     st.write("**Editar Informações**")
                     edit_name = st.text_input("Nome", value=selected_user['nome'])
+                    edit_email = st.text_input("Email", value=selected_user['email'])
                     edit_level = st.selectbox(
                         "Nível de Acesso", 
                         options=["tecnico", "suporte", "gestor", "admin"],
                         index=["tecnico", "suporte", "gestor", "admin"].index(selected_user['nivel_acesso'])
                     )
+                    edit_password = st.text_input("Nova Senha (deixe em branco para não alterar)", type="password")
                     
                     if st.form_submit_button("Salvar Alterações"):
-                        success, message = update_user(selected_user['id'], edit_name, edit_level)
+                        success, message = update_user(
+                            selected_user['id'], 
+                            edit_name, 
+                            edit_level,
+                            edit_email,
+                            edit_password
+                        )
                         if success:
                             st.success(message)
                             st.rerun()
                         else:
                             st.error(message)
 
-                # Botão de Ativar/Desativar
                 status_btn_text = "Reativar Usuário" if not selected_user['is_active'] else "Desativar Usuário"
                 status_btn_type = "primary" if not selected_user['is_active'] else "secondary"
                 
